@@ -1,0 +1,704 @@
+Only in Nxournal-0.4.5/src: .deps
+Only in Nxournal-0.4.5/src: Makefile
+diff -ur xournal-0.4.5/src/main.c Nxournal-0.4.5/src/main.c
+--- xournal-0.4.5/src/main.c	2009-09-27 17:08:34.000000000 -0500
++++ Nxournal-0.4.5/src/main.c	2011-01-04 06:13:18.000000000 -0600
+@@ -19,6 +19,13 @@
+ GtkWidget *winMain;
+ GnomeCanvas *canvas;
+ 
++/*--- bookmark viewer interface ---start---*/
++GtkWidget *index_win;
++  GtkWidget *vbox;
++  GtkWidget *tophbox;
++  GtkWidget *scrollwin;
++/*--- bookmark viewer interface ---end---*/
++
+ struct Journal journal; // the journal
+ struct BgPdf bgpdf;  // the PDF loader stuff
+ struct UIData ui;   // the user interface data
+@@ -37,6 +44,8 @@
+   gboolean can_xinput, success;
+   gchar *tmppath, *tmpfn;
+ 
++  bkViewer_init();	  // initialize the bookmark viewer
++
+   // create some data structures needed to populate the preferences
+   ui.default_page.bg = g_new(struct Background, 1);
+ 
+@@ -300,6 +309,10 @@
+ {
+   gchar *path, *path1, *path2;
+   
++  /*--- for bookmark viewer ---*/
++  bk_flag = 0;		// bookmark viewer is by default off
++  bkData_flag = 0;	// bookmark Data Tree is empty
++
+ #ifdef ENABLE_NLS
+   bindtextdomain (GETTEXT_PACKAGE, PACKAGE_LOCALE_DIR);
+   bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
+Only in Nxournal-0.4.5/src/ttsubset: .deps
+Only in Nxournal-0.4.5/src/ttsubset: Makefile
+Only in Nxournal-0.4.5/src/ttsubset: libttsubset.a
+Only in Nxournal-0.4.5/src/ttsubset: list.o
+Only in Nxournal-0.4.5/src/ttsubset: sft.o
+Only in Nxournal-0.4.5/src/ttsubset: ttcr.o
+diff -ur xournal-0.4.5/src/xo-callbacks.c Nxournal-0.4.5/src/xo-callbacks.c
+--- xournal-0.4.5/src/xo-callbacks.c	2010-05-29 20:22:35.000000000 -0500
++++ Nxournal-0.4.5/src/xo-callbacks.c	2011-01-04 05:16:24.000000000 -0600
+@@ -3893,3 +3893,430 @@
+   ui.exportpdf_layers = gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM (menuitem));
+ }
+ 
++//------------functions of bookmark viewer-----------start-------//
++static GtkTreeModel *
++create_and_fill_model (void)
++{
++  GtkTreeStore  *treestore;
++
++  treestore = gtk_tree_store_new(NUM_COLS, G_TYPE_STRING, G_TYPE_INT); 
++
++  return GTK_TREE_MODEL(treestore);
++}
++
++static void
++onSelectionChanged (GtkTreeSelection *sel, GtkTreeModel *model)
++{
++  //GtkTreePath *path;
++  //gchar *str; 
++  
++  if( gtk_tree_selection_get_selected(sel, &model, &iter_selected) ){ 
++    selected_flag = 1;
++    //path = gtk_tree_model_get_path(model, &iter_selected);
++    //str = gtk_tree_path_to_string(path);
++    //printf("selected: %s\n", str);
++
++	gtk_tree_model_get(model, &iter_selected, COL_PAGE, &selected_page, -1);
++    printf("Goto page: %d\n", selected_page);
++    do_switch_page(selected_page-1, TRUE, FALSE);
++	gtk_widget_set_sensitive(delbutton, TRUE);
++  }else{
++	gtk_widget_set_sensitive(delbutton, FALSE);
++  }
++}
++
++/* Apply the changed text to the cell. */
++static void 
++cell_edited (GtkCellRendererText *renderer, 
++             gchar *path, 
++             gchar *new_text, 
++             GtkTreeView *treeview)
++{
++  GtkTreeIter iter;
++  GtkTreeModel *model;
++  
++  if (g_ascii_strcasecmp (new_text, "") != 0)
++  {
++    model = gtk_tree_view_get_model (treeview);
++    if (gtk_tree_model_get_iter_from_string (model, &iter, path))
++      gtk_tree_store_set (GTK_TREE_STORE (model), &iter, COL_CATEGORY, new_text, -1);
++  }
++}
++
++
++GtkWidget *
++create_view_and_model (void)
++{
++  GtkTreeViewColumn   *col;
++  GtkCellRenderer     *renderer;
++
++  GtkWidget           *view;
++  GtkTreeModel        *model;
++  GtkTreeSelection *selection;
++
++  view = gtk_tree_view_new();
++
++  /* --- Column #1 --- */
++  renderer = gtk_cell_renderer_text_new();
++    /* Setup the column in the tree view to be editable. */
++    g_object_set (renderer, "editable", TRUE, "editable-set", TRUE, NULL);
++    g_signal_connect (G_OBJECT (renderer), "edited",
++                      G_CALLBACK (cell_edited),
++                      (gpointer) view);
++  col = gtk_tree_view_column_new_with_attributes
++                         ("Category", renderer, "text", COL_CATEGORY, NULL);
++  gtk_tree_view_append_column (GTK_TREE_VIEW (view), col);
++
++  /* --- Column #2 --- */
++  renderer = gtk_cell_renderer_text_new();
++  col = gtk_tree_view_column_new_with_attributes
++                         ("Page", renderer, "text", COL_PAGE, NULL);
++  gtk_tree_view_append_column (GTK_TREE_VIEW (view), col);
++
++  // initialize the data
++  model = create_and_fill_model(); 
++
++  gtk_tree_view_set_model(GTK_TREE_VIEW(view), model);
++
++  /* Allow only single row to be selected one at a time. */
++  selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (view));
++  gtk_tree_selection_set_mode (selection, GTK_SELECTION_SINGLE);
++  g_signal_connect(selection, "changed", G_CALLBACK(onSelectionChanged), model);
++
++  g_object_unref(model); /* destroy model automatically with view */
++
++  return view;
++}
++
++static void
++onUpButtonPress (GtkWidget *button, gpointer data)
++{
++  GtkTreePath *path;
++  GtkTreePath *current_path;
++  gchar *path_str;
++  char last_char;
++  int length;
++
++  GtkTreeModel *model;
++  GtkTreeIter target;
++
++  model = gtk_tree_view_get_model(GTK_TREE_VIEW(bkTree_view));
++  current_path = gtk_tree_model_get_path(model, &iter_selected);
++  
++  path_str = gtk_tree_path_to_string(current_path);
++  //printf("current path: %s\n", path_str);
++  length = strlen(path_str); 
++  last_char = *(path_str+length-1);
++  //printf("!%c\n", last_char);
++
++  /*  the way I implement this function is only valid for number 
++   *  range between 0~9(ascii char), 
++   *  eg. int 0 <-> char 48, int 1 <-> char 49
++   */
++  if(last_char-1 >= 48){
++    *(path_str+length-1) = last_char-1;
++    printf("new path: %s\n", path_str);
++    path = gtk_tree_path_new_from_string(path_str);
++    gtk_tree_model_get_iter(model, &target, path);
++    gtk_tree_store_move_before(GTK_TREE_STORE(model), &iter_selected, &target);
++  }else{
++    *(path_str+length-1) = 48;
++    printf("new path: %s\n", path_str);
++    path = gtk_tree_path_new_from_string(path_str);
++    gtk_tree_model_get_iter(model, &target, path);
++    gtk_tree_store_move_before(GTK_TREE_STORE(model), &iter_selected, &target);
++  }
++}
++
++static void
++onDownButtonPress (GtkWidget *button, gpointer data)
++{
++  GtkTreePath *path;
++  GtkTreePath *current_path;
++  gchar *path_str;
++  char last_char;
++  int length;
++
++  GtkTreeModel *model;
++  GtkTreeIter target;
++
++  model = gtk_tree_view_get_model(GTK_TREE_VIEW(bkTree_view));
++  current_path = gtk_tree_model_get_path(model, &iter_selected);
++  
++  path_str = gtk_tree_path_to_string(current_path);
++  //printf("current path: %s\n", path_str);
++  length = strlen(path_str); 
++  last_char = *(path_str+length-1);
++  //printf("!%c\n", last_char);
++
++  *(path_str+length-1) = last_char+1;
++  printf("new path: %s\n", path_str);
++  path = gtk_tree_path_new_from_string(path_str);
++  if(gtk_tree_model_get_iter(model, &target, path))
++    gtk_tree_store_move_after(GTK_TREE_STORE(model), &iter_selected, &target);
++}
++
++/**************************************************************************
++ *
++ *  onAddButtonPress
++ *
++ *  Button has been clicked, or <enter> has been hit in entry
++ *
++ **************************************************************************/
++static void
++onAddButtonPress (GtkWidget *entry, gpointer data)
++{
++  const gchar *txt;
++  
++  g_assert(GTK_IS_ENTRY(entry));
++  
++  txt = gtk_entry_get_text(GTK_ENTRY(entry));
++  
++  /* ignore if entry is empty */
++  if (txt && *txt)
++  {
++	GtkTreeModel *model;
++	GtkTreeIter   newrow;
++    model = gtk_tree_view_get_model(GTK_TREE_VIEW(bkTree_view));
++    if (selected_flag == 1) {
++   	  gtk_tree_store_append(GTK_TREE_STORE(model), &newrow, &iter_selected);
++  	  printf("Add %s after Page %d, as sub directory\n", txt, selected_page);
++    }else{
++   	  gtk_tree_store_append(GTK_TREE_STORE(model), &newrow, NULL);
++    }
++	
++    gtk_tree_store_set(GTK_TREE_STORE(model), &newrow,
++                       COL_CATEGORY, txt,
++                       COL_PAGE, ui.pageno+1,
++                       -1);
++  	gtk_entry_set_text(GTK_ENTRY(entry), ""); /* clear entry */
++  }
++}
++
++static void
++onDelButtonPress (GtkWidget *button, gpointer data)
++{
++	GtkTreeSelection *sel;
++	GtkTreeModel     *model;
++	GtkTreeIter       selected_row;
++
++	sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(bkTree_view));
++
++	g_assert(gtk_tree_selection_get_mode(sel) == GTK_SELECTION_SINGLE);
++
++	if (gtk_tree_selection_get_selected(sel, &model, &selected_row))
++	{
++	  gtk_tree_store_remove(GTK_TREE_STORE(model), &selected_row);
++      selected_flag = 0;
++	  printf("Selected category removed\n");
++	}
++	else
++	{
++		/* If no row is selected, the button should
++		 *  not be clickable in the first place */
++		g_assert_not_reached();
++	}
++}
++
++/* Go through each row*/ 
++gboolean save_bookmark2file_foreach(GtkTreeModel *model, 
++							           GtkTreePath *path, 
++									   GtkTreeIter *iter,
++									   gpointer data) 
++{ 
++  gchar *col1, *pathstr; 
++  guint col2;
++
++  /* get the data stored in the model... */ 
++  gtk_tree_model_get(model, iter, COL_PAGE, &col2, -1);
++  gtk_tree_model_get(model, iter, COL_CATEGORY, &col1, -1);
++  /* ...and get the path of the current row */ 
++  pathstr = gtk_tree_path_to_string(path); 
++  //g_print("<item Category=\"%s\" Page=\"%d\" Path=\"%s\"/>\n", col1, col2, pathstr);
++  gzprintf(data, "<Bookmark Category=\"%s\" Page=\"%d\" Path=\"%s\"/>\n", 
++           col1, col2, pathstr);
++
++  /* return FALSE to keep iterating */ 
++  return FALSE; 
++} 
++
++void save_bookmark2file(void)
++{
++  GtkTreeModel *model;
++
++  //printf("Current bookmarks:\n");
++  model = gtk_tree_view_get_model(GTK_TREE_VIEW(bkTree_view));
++  gtk_tree_model_foreach(model, (GtkTreeModelForeachFunc)
++                         save_bookmark2file_foreach, NULL);
++
++}
++
++static void
++onHideButtonPress (GtkWidget *window,
++			    gpointer *data)
++{
++  gtk_widget_hide_all(GTK_WIDGET(data));
++  bk_flag = 0;
++  //save_bookmark2file(); 
++}
++
++static GtkWidget *
++create_entry_hbox (void)
++{
++  GtkWidget *hbox;
++  GtkWidget *entry;
++  GtkWidget *addbutton;
++  GtkWidget *upbutton;
++  GtkWidget *downbutton;
++  GtkWidget *hidebutton;
++  
++  hbox = gtk_hbox_new(FALSE, 2);
++  entry = gtk_entry_new();
++  addbutton = gtk_button_new_from_stock(GTK_STOCK_ADD);
++    gtk_button_set_label(GTK_BUTTON(addbutton), "+");
++  delbutton = gtk_button_new_from_stock(GTK_STOCK_REMOVE);
++    gtk_button_set_label(GTK_BUTTON(delbutton), "-");
++  upbutton = gtk_button_new_with_label(">");
++  downbutton = gtk_button_new_with_label("<");
++  hidebutton = gtk_button_new_with_label("XD");
++  
++  // Callbacks
++  g_signal_connect(entry, "activate", G_CALLBACK(onAddButtonPress), NULL);
++  g_signal_connect_swapped(addbutton, "clicked", G_CALLBACK(onAddButtonPress), entry);
++  g_signal_connect(delbutton, "clicked", G_CALLBACK(onDelButtonPress), NULL);
++  g_signal_connect(upbutton, "clicked", G_CALLBACK(onUpButtonPress), NULL);
++  g_signal_connect(downbutton, "clicked", G_CALLBACK(onDownButtonPress), NULL);
++  g_signal_connect(hidebutton, "clicked", G_CALLBACK(onHideButtonPress), index_win);
++  
++  // Widget Placement
++  gtk_box_pack_start(GTK_BOX(hbox), entry, TRUE, TRUE, 0);
++  gtk_box_pack_start(GTK_BOX(hbox), addbutton, FALSE, FALSE, 0);
++  gtk_box_pack_start(GTK_BOX(hbox), delbutton, FALSE, FALSE, 0);
++  gtk_box_pack_start(GTK_BOX(hbox), upbutton, FALSE, FALSE, 0);
++  gtk_box_pack_start(GTK_BOX(hbox), downbutton, FALSE, FALSE, 0);
++  gtk_box_pack_start(GTK_BOX(hbox), hidebutton, FALSE, FALSE, 0);
++  
++  /* at beginning no rows, so nothing to delete */
++  gtk_widget_set_sensitive(delbutton, FALSE);
++  
++  return hbox;
++}
++
++
++void
++bkViewer_init(void)
++{
++  selected_flag = 0;
++  NofBK = 0;
++
++  // Interface
++  index_win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
++    gtk_window_set_default_size(GTK_WINDOW(index_win), 300, 600);
++    gtk_window_set_position(GTK_WINDOW(index_win), GTK_WIN_POS_CENTER);
++
++  vbox = gtk_vbox_new(FALSE, 2);
++  bkTree_view = create_view_and_model();
++
++  tophbox = create_entry_hbox();
++  gtk_box_pack_start(GTK_BOX(vbox), tophbox, FALSE, FALSE, 0);
++
++  scrollwin = gtk_scrolled_window_new(NULL,NULL);
++  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrollwin),
++                                 GTK_POLICY_AUTOMATIC,
++                                 GTK_POLICY_AUTOMATIC);
++
++  // Widget Placement
++  gtk_container_add(GTK_CONTAINER(scrollwin), bkTree_view);
++  gtk_box_pack_start(GTK_BOX(vbox), scrollwin, TRUE, TRUE, 0);
++  gtk_container_add(GTK_CONTAINER(index_win), vbox);
++
++
++}
++
++/* Gets the parent of a path string. 
++ * passing "0:1:2" would return "0:1", 
++ * passing "0:1" would return "0", 
++ * passing "0" would return NULL */ 
++gchar *gtk_tree_path_string_get_parent(gchar *path) 
++{ 
++    gchar *colon; 
++
++    g_return_val_if_fail(path != NULL, NULL); 
++
++    colon = g_strrstr(path, ":"); 
++    if(colon == NULL) 
++        return NULL; 
++
++    return g_strndup(path, colon - path); 
++} 
++
++
++/* Make sure that path exists within model */ 
++void gtk_tree_model_generate_path(GtkTreeModel *model, gchar *path) 
++{ 
++    GtkTreeIter iter, parent; 
++    gchar *temp; 
++
++    while(TRUE) 
++    {   
++        /* if this returns TRUE, then this path exists and we're fine */ 
++        if(gtk_tree_model_get_iter_from_string(model, &iter, path)) 
++            break; 
++
++        temp = path; 
++        path = gtk_tree_path_string_get_parent(path); 
++        /* if there's no parent, then it's toplevel */ 
++        if(path == NULL) 
++        {   
++            if(GTK_IS_TREE_STORE(model)) 
++                gtk_tree_store_append(GTK_TREE_STORE(model), &parent, NULL); 
++            else 
++                gtk_list_store_append(GTK_LIST_STORE(model), &parent); 
++            gtk_tree_model_generate_path(model, temp); 
++            break; 
++        }   
++        if(GTK_IS_TREE_STORE(model)) 
++        {   
++            gtk_tree_model_generate_path(model, path); 
++            gtk_tree_model_get_iter_from_string(model, &parent, path); 
++            gtk_tree_store_append(GTK_TREE_STORE(model), &iter, &parent); 
++        }   
++    }   
++} 
++
++
++// toggle bookmark mode
++void
++on_viewBookmark_activate             (GtkMenuItem     *menuitem,
++                                        gpointer         user_data)
++{
++  int i;
++  GtkTreeModel *model;
++  GtkTreeIter iter;
++
++  model = gtk_tree_view_get_model(GTK_TREE_VIEW(bkTree_view));
++
++  //printf("%d\n", bk_flag);
++  //printf("*NofBK:%d\n", NofBK);
++
++  // show the existed bookmarks
++  for(i=0; i<NofBK; i++){
++    gtk_tree_model_generate_path(model, bk[i].path);
++    gtk_tree_model_get_iter_from_string(model, &iter, bk[i].path);
++    gtk_tree_store_set(GTK_TREE_STORE(model), &iter, 
++                       COL_CATEGORY, bk[i].category, 
++                       COL_PAGE, (gint) bk[i].page, -1);
++    //printf("Category:%s, Page:%s, Path:%s\n",  
++    //       bk[i].category, bk[i].page, bk[i].path); 
++    printf("Category:%s, Page:%d, Path:%s\n",  
++           bk[i].category, (gint) bk[i].page, bk[i].path); 
++  }
++
++  if(bk_flag == 0){
++    bk_flag = 1;
++    gtk_widget_show_all(index_win);
++  }else{
++    printf("Bookmark Viewer already opened\n");
++  }
++}
++//------------functions of bookmark viewer-----------end-------//
+diff -ur xournal-0.4.5/src/xo-callbacks.h Nxournal-0.4.5/src/xo-callbacks.h
+--- xournal-0.4.5/src/xo-callbacks.h	2009-09-28 18:43:34.000000000 -0500
++++ Nxournal-0.4.5/src/xo-callbacks.h	2011-01-04 06:15:47.000000000 -0600
+@@ -17,6 +17,54 @@
+ #include <gtk/gtk.h>
+ 
++//------------global variables of bookmark viewer-----------start-------//
++enum
++{
++  COL_CATEGORY = 0,
++  COL_PAGE,
++  NUM_COLS
++} ;
++GtkTreeIter iter_selected;
++gint selected_page;
++GtkWidget *delbutton;
++GtkWidget *bkTree_view;
++int selected_flag;
++int bk_flag;	   // determine whether bookmark viewer is open or not
++int bkData_flag;   // determine whether bookmark Data tree is empty or not 
++
++//------------global variables of bookmark viewer-----------end-------//
++
++
++//------------functions of bookmark viewer-----------start-------//
++GtkWidget *create_view_and_model (void);
++static void gtk_index_quit (GtkWidget *window,
++		   		            gpointer data);
++static GtkWidget *
++    create_entry_hbox (void);
++static void
++    onDelButtonPress (GtkWidget *button, gpointer data);
++static void
++    onAddButtonPress (GtkWidget *entry, gpointer data);
++static void
++    onDownButtonPress (GtkWidget *button, gpointer data);
++static void
++    onUpButtonPress (GtkWidget *button, gpointer data);
++static void 
++    cell_edited (GtkCellRendererText *renderer, 
++                 gchar *path, 
++                 gchar *new_text, 
++                 GtkTreeView *treeview);
++static void
++    onSelectionChanged (GtkTreeSelection *sel, GtkTreeModel *model);
++static GtkTreeModel *
++    create_and_fill_model (void);
++gboolean save_bookmark2file_foreach(GtkTreeModel *model, 
++							           GtkTreePath *path, 
++									   GtkTreeIter *iter,
++									   gpointer data);
++//------------functions of bookmark viewer-----------end-------//
++
++
+ void
+ on_fileNew_activate                    (GtkMenuItem     *menuitem,
+                                         gpointer         user_data);
+ 
+@@ -472,6 +521,12 @@
+ on_viewFullscreen_activate             (GtkMenuItem     *menuitem,
+                                         gpointer         user_data);
+ 
++/*--- bookmark viewer ---start---*/
++void
++on_viewBookmark_activate               (GtkMenuItem     *menuitem,
++                                        gpointer         user_data);
++/*--- bookmark viewer ---end---*/
++
+ void
+ on_optionsButtonMappings_activate      (GtkMenuItem     *menuitem,
+                                         gpointer         user_data);
+diff -ur xournal-0.4.5/src/xo-file.c Nxournal-0.4.5/src/xo-file.c
+--- xournal-0.4.5/src/xo-file.c	2009-09-28 18:36:05.000000000 -0500
++++ Nxournal-0.4.5/src/xo-file.c	2011-01-04 06:12:28.000000000 -0600
+@@ -204,6 +204,15 @@
+     }
+     gzprintf(f, "</page>\n");
+   }
++
++  /* ---write bookmarks to xoj file---start-- */
++  GtkTreeModel *model;
++
++  model = gtk_tree_view_get_model(GTK_TREE_VIEW(bkTree_view));
++  gtk_tree_model_foreach(model, (GtkTreeModelForeachFunc)
++                         save_bookmark2file_foreach, f);
++  /* ---write bookmarks to xoj file---end-- */
++
+   gzprintf(f, "</xournal>\n");
+   gzclose(f);
+   setlocale(LC_NUMERIC, "");
+@@ -691,7 +691,33 @@
+       attribute_values++;
+     }
+     if (has_attr!=15) *error = xoj_invalid();
++  }	 
++  /*-------------- bookmark viewer ---------------start---
++   * when read label Bookmark get correspond attributes
++   * for initialization of the bookmarks	  
++   *-------------- bookmark viewer -----------------------*/
++  else if (!strcmp(element_name, "Bookmark")) { 
++    //printf("NofBK:%d\n", NofBK);
++    while (*attribute_names!=NULL) {
++      if (!strcmp(*attribute_names, "Category")) {
++        bk[NofBK].category = g_strdup(*attribute_values);
++        //printf("Category:%s\n", *attribute_values);
++      }
++      else if (!strcmp(*attribute_names, "Page")) {
++        //bk[NofBK].page = g_strdup(*attribute_values);
++        bk[NofBK].page = g_ascii_strtod(*attribute_values, NULL);
++        //printf("Page:%s\n", *attribute_values);
++      }
++      else if (!strcmp(*attribute_names, "Path")) {
++        bk[NofBK].path = g_strdup(*attribute_values);
++        //printf("Path:%s\n", *attribute_values);
++      }
++      attribute_names++;
++      attribute_values++;
++    }
++    NofBK++;
+   }
++  /*-------------- bookmark viewer ---------------end---*/
+ }
+ 
+ void xoj_parser_end_element(GMarkupParseContext *context,
+diff -ur xournal-0.4.5/src/xo-file.h Nxournal-0.4.5/src/xo-file.h
+--- xournal-0.4.5/src/xo-file.h	2009-09-27 17:45:53.000000000 -0500
++++ Nxournal-0.4.5/src/xo-file.h	2011-01-04 05:48:40.000000000 -0600
+@@ -27,5 +27,16 @@
+ #define AUTOSAVE_FILENAME_FILTER "%s.autosave*.xoj"
+ 
++/*--- for bookmark viewer ---start---*/
++typedef struct Bookmark {
++  gchar *category;
++  //gchar *page;
++  gdouble page;
++  gchar *path;
++} Bookmark;
++Bookmark bk[1000];
++int NofBK;
++/*--- for bookmark viewer ---end---*/
++
+ void new_journal(void);
+ gboolean save_journal(const char *filename, gboolean is_auto);
+ gboolean close_journal(void);
+diff -ur xournal-0.4.5/src/xo-interface.c Nxournal-0.4.5/src/xo-interface.c
+--- xournal-0.4.5/src/xo-interface.c	2009-10-02 01:03:32.000000000 -0500
++++ Nxournal-0.4.5/src/xo-interface.c	2011-01-04 06:07:27.000000000 -0600
+@@ -283,6 +283,9 @@
+   GtkWidget *buttonZoomSet;
+   GtkWidget *tmp_image;
+   GtkWidget *buttonFullscreen;
++
++  GtkWidget *buttonBookmark;	  // add a button to invoke bookmark viewer
++
+   GtkWidget *toolbarPen;
+   GSList *buttonPen_group = NULL;
+   GtkWidget *buttonPen;
+@@ -1538,6 +1541,12 @@
+   gtk_container_add (GTK_CONTAINER (toolbarMain), buttonFullscreen);
+   gtk_tool_item_set_tooltip (GTK_TOOL_ITEM (buttonFullscreen), tooltips, _("Toggle Fullscreen"), NULL);
+ 
++  /*---bookmark viewer---start---*/
++  buttonBookmark = (GtkWidget*) gtk_tool_button_new (NULL, "B");
++  gtk_widget_show (buttonBookmark);
++  gtk_container_add (GTK_CONTAINER (toolbarMain), buttonBookmark);
++  /*---bookmark viewer---end---*/
++
+   toolbarPen = gtk_toolbar_new ();
+   gtk_widget_show (toolbarPen);
+   gtk_box_pack_start (GTK_BOX (vboxMain), toolbarPen, FALSE, FALSE, 0);
+@@ -2414,6 +2423,13 @@
+   g_signal_connect ((gpointer) buttonFullscreen, "toggled",
+                     G_CALLBACK (on_viewFullscreen_activate),
+                     NULL);
++
++  /*--- bookmark viewer ---start---*/
++  g_signal_connect ((gpointer) buttonBookmark, "clicked",
++                    G_CALLBACK (on_viewBookmark_activate),
++                    NULL);
++  /*--- bookmark viewer ---end---*/
++
+   g_signal_connect ((gpointer) buttonPen, "toggled",
+                     G_CALLBACK (on_toolsPen_activate),
+                     NULL);
+@@ -2745,6 +2761,9 @@
+   GLADE_HOOKUP_OBJECT (winMain, buttonNormalSize, "buttonNormalSize");
+   GLADE_HOOKUP_OBJECT (winMain, buttonZoomSet, "buttonZoomSet");
+   GLADE_HOOKUP_OBJECT (winMain, buttonFullscreen, "buttonFullscreen");
++  /* --- bookmark viewer ---start---*/
++  GLADE_HOOKUP_OBJECT (winMain, buttonBookmark, "buttonBookmark");
++  /* --- bookmark viewer ---end---*/
+   GLADE_HOOKUP_OBJECT (winMain, toolbarPen, "toolbarPen");
+   GLADE_HOOKUP_OBJECT (winMain, buttonPen, "buttonPen");
+   GLADE_HOOKUP_OBJECT (winMain, buttonEraser, "buttonEraser");
+diff -ur xournal-0.4.5/src/xo-misc.h Nxournal-0.4.5/src/xo-misc.h
+--- xournal-0.4.5/src/xo-misc.h	2009-09-27 22:45:56.000000000 -0500
++++ Nxournal-0.4.5/src/xo-misc.h	2011-01-04 06:12:52.000000000 -0600
+@@ -97,6 +97,10 @@
+ 
+ void do_fullscreen(gboolean active);
+ 
++/*--- bookmark viewer ---start---*/
++void show_Bookmark(GtkWidget *index_win);
++/*--- bookmark viewer ---end---*/
++
+ // fix GTK+ 2.16/2.17 issues with XInput events
+ gboolean filter_extended_events(GtkWidget *widget, GdkEvent *event, gpointer user_data);
+ // gboolean fix_extended_events(GtkWidget *widget, GdkEvent *event, gpointer user_data);
+Only in Nxournal-0.4.5/src: xournal
+diff -ur xournal-0.4.5/src/xournal.h Nxournal-0.4.5/src/xournal.h
+--- xournal-0.4.5/src/xournal.h	2009-10-02 18:42:28.000000000 -0500
++++ Nxournal-0.4.5/src/xournal.h	2011-01-04 06:03:40.000000000 -0600
+@@ -365,6 +365,12 @@
+ 
+ extern GtkWidget *winMain;
+ extern GnomeCanvas *canvas;
++/*--- bookmark viewer interface ---start---*/
++extern GtkWidget *index_win;
++ extern GtkWidget *vbox;
++ extern GtkWidget *tophbox;
++ extern GtkWidget *scrollwin;
++/*--- bookmark viewer interface ---end---*/
+ 
+ // the data
+ 

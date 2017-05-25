@@ -1,6 +1,7 @@
 *.a
 *.gmo
 *.o
+*~
 Makefile
 Makefile.in
 aclocal.m4
@@ -9,8 +10,10 @@ autom4te.cache/
 compile
 config.guess
 config.h
+config.h.in
 config.status
 config.sub
+config.log
 configure
 po/Makefile.in.in
 po/POTFILES
@@ -22,3 +25,4 @@ src/ttsubset/Makefile
 src/ttsubset/Makefile.in
 src/xournal
 stamp-h1
+
